@@ -2,7 +2,7 @@ import select
 import socket
 import queue
 import textwrap
-import libscrc
+##GAPS- import libscrc
 import threading
 import time
 import http.server
@@ -22,8 +22,11 @@ verrel = "0.0.14e"
 serverhost = "0.0.0.0"
 serverport = 5781
 httphost = "0.0.0.0"
-httpport = 5782
-verbose = True 
+httpport = 5784 # 5782 GAPS replace for testing
+verbose = False #True
+verbput = False
+verbget = False
+verbreadreg = False
 #firstping = False
 sendseq = 1
 #Time to sleep waiting on API response 
@@ -32,8 +35,97 @@ ResponseWaitInterval = 0.5
 MaxInverterResponseWait = 10 
 #Totaal time in seconds to wait on Datalogger Response 
 MaxDataloggerResponseWait = 5
+#GAPS<<<
+# Some constants to make code easier to read
+InverterSendCommand = "05"
+DataLoggerSendCommand = "19"
 
+NoRetryRegisterReads = 5
 
+# CRC table created at startup
+crc_table = (
+0x0000,0xc0c1,0xc181,0x0140,0xc301,0x03c0,0x0280,0xc241,
+0xc601,0x06c0,0x0780,0xc741,0x0500,0xc5c1,0xc481,0x0440,
+0xcc01,0x0cc0,0x0d80,0xcd41,0x0f00,0xcfc1,0xce81,0x0e40,
+0x0a00,0xcac1,0xcb81,0x0b40,0xc901,0x09c0,0x0880,0xc841,
+0xd801,0x18c0,0x1980,0xd941,0x1b00,0xdbc1,0xda81,0x1a40,
+0x1e00,0xdec1,0xdf81,0x1f40,0xdd01,0x1dc0,0x1c80,0xdc41,
+0x1400,0xd4c1,0xd581,0x1540,0xd701,0x17c0,0x1680,0xd641,
+0xd201,0x12c0,0x1380,0xd341,0x1100,0xd1c1,0xd081,0x1040,
+0xf001,0x30c0,0x3180,0xf141,0x3300,0xf3c1,0xf281,0x3240,
+0x3600,0xf6c1,0xf781,0x3740,0xf501,0x35c0,0x3480,0xf441,
+0x3c00,0xfcc1,0xfd81,0x3d40,0xff01,0x3fc0,0x3e80,0xfe41,
+0xfa01,0x3ac0,0x3b80,0xfb41,0x3900,0xf9c1,0xf881,0x3840,
+0x2800,0xe8c1,0xe981,0x2940,0xeb01,0x2bc0,0x2a80,0xea41,
+0xee01,0x2ec0,0x2f80,0xef41,0x2d00,0xedc1,0xec81,0x2c40,
+0xe401,0x24c0,0x2580,0xe541,0x2700,0xe7c1,0xe681,0x2640,
+0x2200,0xe2c1,0xe381,0x2340,0xe101,0x21c0,0x2080,0xe041,
+0xa001,0x60c0,0x6180,0xa141,0x6300,0xa3c1,0xa281,0x6240,
+0x6600,0xa6c1,0xa781,0x6740,0xa501,0x65c0,0x6480,0xa441,
+0x6c00,0xacc1,0xad81,0x6d40,0xaf01,0x6fc0,0x6e80,0xae41,
+0xaa01,0x6ac0,0x6b80,0xab41,0x6900,0xa9c1,0xa881,0x6840,
+0x7800,0xb8c1,0xb981,0x7940,0xbb01,0x7bc0,0x7a80,0xba41,
+0xbe01,0x7ec0,0x7f80,0xbf41,0x7d00,0xbdc1,0xbc81,0x7c40,
+0xb401,0x74c0,0x7580,0xb541,0x7700,0xb7c1,0xb681,0x7640,
+0x7200,0xb2c1,0xb381,0x7340,0xb101,0x71c0,0x7080,0xb041,
+0x5000,0x90c1,0x9181,0x5140,0x9301,0x53c0,0x5280,0x9241,
+0x9601,0x56c0,0x5780,0x9741,0x5500,0x95c1,0x9481,0x5440,
+0x9c01,0x5cc0,0x5d80,0x9d41,0x5f00,0x9fc1,0x9e81,0x5e40,
+0x5a00,0x9ac1,0x9b81,0x5b40,0x9901,0x59c0,0x5880,0x9841,
+0x8801,0x48c0,0x4980,0x8941,0x4b00,0x8bc1,0x8a81,0x4a40,
+0x4e00,0x8ec1,0x8f81,0x4f40,0x8d01,0x4dc0,0x4c80,0x8c41,
+0x4400,0x84c1,0x8581,0x4540,0x8701,0x47c0,0x4680,0x8641,
+0x8201,0x42c0,0x4380,0x8341,0x4100,0x81c1,0x8081,0x4040,
+)
+
+##GAPS+ tables of registers to read (data logger and inverter registers need to be read slightly differently
+datalogger_registers_table = (
+{"register": 4, "name": "Interval", "description": "update interval, Ascii, e.g 5 or 1 or 0.5"},
+{"register": 17, "name": "growatt_ip", "description": "Growatt server ip addres, Ascii, set for redirection to Grott e.g. 192.168.0.206"},
+{"register": 18, "name": "growatt_port", "description": "Growatt server Port, Num, set for redirection to Grott e.g. 5279"},
+{"register": 31, "name": "datetime", "description": "current date-time, Ascii, e.g 2022-05-17 21:01:50"}
+)
+inverter_registers_table = (
+{"register": 1000, "name": "Float charge current limit", "description": "When charge current battery need is lower than this value, enter nto float charge", "value": "", "unit": "0.1", "initial": "600"},
+{"register": 1044, "name": "Priority", "description": "ForceChrEn / ForceDischrEn Load first / Bat first / Grid first", "value": "0:Load (default) 1:Battery 2:Grid", "unit": "int", "initial": "0"},
+{"register": 1060, "name": "BuckUpsFunEn", "description": "Ups function enable or disable", "value": "Enable: 1 Disable: 0", "unit": "int", "initial": ""},
+{"register": 1061, "name": "BuckUPSVoltSet", "description": "UPS output voltage", "value": "0:230 1:208 2:240", "unit": "int", "initial": "230v"},
+{"register": 1062, "name": "UPSFreqSet", "description": "UPS output frequency", "value": "0:50Hz 1:60Hz", "unit": "int", "initial": "50Hz"},
+{"register": 1070, "name": "GridFirstDischargePowerRate", "description": "Discharge Power Rate when Grid First", "value": "0-100", "unit": "1%", "initial": ""},
+{"register": 1071, "name": "GridFirstStopSOC", "description": "Stop Discharge soc when Grid First", "value": "0-100", "unit": "1%", "initial": ""},
+{"register": 1080, "name": "Grid First Start Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1081, "name": "Grid First Stop Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1082, "name": "Grid First Stop Switch 1", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1083, "name": "Grid First Start Time 2", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1084, "name": "Grid First Stop Time 2", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1085, "name": "Grid First Stop Switch 2", "description": "Enable: 1 Disable: 0 ForceDischarge Switch&LCD_SET_FORCE_TRUE_2)==LCD_SET_FORCE_TRUE_2", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1086, "name": "Grid First Start Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1087, "name": "Grid First Stop Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1088, "name": "Grid First Stop Switch 3", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1090, "name": "Bat FirstPower Rate", "description": "Charge Power Rate when Bat First", "value": "0-100", "unit": "1%", "initial": ""},
+{"register": 1091, "name": "Bat First stop SOC", "description": "Stop Charge soc when Bat First", "value": "0-100", "unit": "1%", "initial": ""},
+{"register": 1092, "name": "AC charge Switch", "description": "When Bat First Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1100, "name": "Bat First Start Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1101, "name": "Bat First Stop Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1102, "name": "Bat First on/off Switch 1", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1103, "name": "Bat First Start Time 2", "description": "High eight bit: hour Low eight bit: minute",	"value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1104, "name": "Bat First Stop Time 2", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1105, "name": "Bat First on/off Switch 2", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1106, "name": "Bat First Start Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1107, "name": "Bat First Stop Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1108, "name": "Bat First on/off Switch 3", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1109, "name": "NoName", "description": "Load First Discharge Stopped Soc", "value": "0-100", "unit": "int", "initial": ""},
+{"register": 1110, "name": "Load First Start Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1111, "name": "Load First Stop Time 1", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1112, "name": "Load First on/off Switch 1", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1113, "name": "Load First Start Time 2", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1114, "name": "Load First Stop Time 2", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1115, "name": "Load First on/off Switch 2", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""},
+{"register": 1116, "name": "Load First Start Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1117, "name": "Load First Stop Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
+{"register": 1118, "name": "Load First on/off Switch 3", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""}
+)
+#GAPS>>>
 # Formats multi-line data
 def format_multi_line(prefix, string, size=80):
     size -= len(prefix)
@@ -69,11 +161,15 @@ def validate_record(xdata):
     # validata data record on length and CRC (for "05" and "06" records)
     
     data = bytes.fromhex(xdata)
+    crc = 0     ##GAPS+
     ldata = len(data)
     len_orgpayload = int.from_bytes(data[4:6],"big")
     header = "".join("{:02x}".format(n) for n in data[0:8])
     protocol = header[6:8]
 
+    print("***GAPS validating record with protocol: ", protocol)    ##GAPS+
+##    print("GAPS - Original Data:")      ##GAPS+
+##    print(format_multi_line("\t\t ", xdata))
     if protocol in ("05","06"):
         lcrc = 4
         crc = int.from_bytes(data[ldata-2:ldata],"big")
@@ -83,7 +179,9 @@ def validate_record(xdata):
     len_realpayload = (ldata*2 - 12 -lcrc) / 2
 
     if protocol != "02" :
-                crc_calc = libscrc.modbus(data[0:ldata-2])
+        crc_calc = calculateCRC (data[0:ldata-2])  ##GAPS+
+        print ("***GAPS calculated and received CRC: ", crc_calc, crc)   ##GAPS+
+##GAPS-                crc_calc = libscrc.modbus(data[0:ldata-2])
 
     if len_realpayload == len_orgpayload :
         returncc = 0
@@ -99,7 +197,7 @@ def htmlsendresp(self, responserc, responseheader,  responsetxt) :
         self.send_response(responserc)
         self.send_header('Content-type', responseheader)
         self.end_headers()
-        self.wfile.write(responsetxt) 
+        self.wfile.write(responsetxt.encode('UTF-8')) #GAPS encode so in main code only deal with strings
         if verbose: print("\t - Grotthttpserver - http response send: ", responserc, responseheader, responsetxt)
 
 def createtimecommand(protocol,loggerid,sequenceno) : 
@@ -131,7 +229,8 @@ def createtimecommand(protocol,loggerid,sequenceno) :
         if protocol != "02" :
             #encrypt message 
             body = decrypt(body) 
-            crc16 = libscrc.modbus(bytes.fromhex(body))
+##GAPS-            crc16 = libscrc.modbus(bytes.fromhex(body))
+            crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
             body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
         
         if verbose:
@@ -146,6 +245,103 @@ def createtimecommand(protocol,loggerid,sequenceno) :
 
         return(body)
 
+#GAPS<<<        
+def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
+    bodybytes = dataloggerid.encode('utf-8')
+    body = bodybytes.hex()
+
+    if loggerreg[dataloggerid]["protocol"] == "06" :
+        body = body + "0000000000000000000000000000000000000000"
+    body = body + "{:04x}".format(int(register))
+    #assumption now only 1 reg query; other put below end register
+    body = body + "{:04x}".format(int(register))
+    #calculate length of payload = body/2 (str => bytes) + 2 bytes invertid + command. 
+    bodylen = int(len(body)/2+2)
+    
+    #device id for datalogger is by default "01" for inverter deviceid is inverterid!
+    deviceid = "01"
+    # test if it is inverter command and set 
+    if sendcommand == InverterSendCommand:
+        deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
+
+    header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+    body = header + body 
+    body = bytes.fromhex(body)
+
+    if verbreadreg:
+        print("\t - Grotthttpserver - unencrypted get command:")
+        print(format_multi_line("\t\t ",body))
+
+    if loggerreg[dataloggerid]["protocol"] != "02" :
+        #encrypt message 
+        body = decrypt(body) 
+        crc16 = calculateCRC (bytes.fromhex(body))
+        body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
+
+    # add header
+    if verbreadreg:
+        print("\t - Grotthttpserver: Get command created :")
+        print(format_multi_line("\t\t ",body))
+
+    # queue command 
+    qname = loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
+
+    # Message may get "lost" and no reply received so retry a few times
+    i = 0
+    while i < NoRetryRegisterReads:
+        i += 1
+        self.send_queuereg[qname].put(body) # Add message to queue 
+        responseno = "{:04x}".format(sendseq)
+        regkey = "{:04x}".format(int(register))
+        try: 
+            del commandresponse[sendcommand][regkey] 
+        except: 
+            pass 
+
+        #wait for response
+        #Set #retry waiting loop for datalogger or inverter 
+        if sendcommand == InverterSendCommand :
+           wait = round(MaxInverterResponseWait/ResponseWaitInterval)
+        else :
+            wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
+
+        formatval = "dec"   # Default to dec. May need to provide a format for each register in register arrays?
+        for x in range(wait):
+            if verbreadreg: print("\t - Grotthttpserver - wait for GET response")
+            try: 
+                comresp = commandresponse[sendcommand][regkey]
+                
+                if sendcommand == InverterSendCommand :
+                    if formatval == "dec" : 
+                        comresp["value"] = str (int(comresp["value"],16))
+                    elif formatval == "text" : 
+                        comresp["value"] = codecs.decode(comresp["value"], "hex").decode('utf-8')
+                responsetxt = comresp["value"]
+                return responsetxt
+
+            except  : 
+                #wait and try again
+                time.sleep(ResponseWaitInterval)
+            
+        try: 
+            if comresp["value"] != "" : 
+                responsetxt = comresp["value"]
+                return responsetxt
+
+        except : 
+            continue
+    return "-" # If no valid response is received return a -
+    
+def hextime_to_string (s):
+    # s is string representation of the 2 byte time value
+    x = int(s)
+    u = str((x >> 8) & 0xff).zfill(2) # Upper byte (fill to 2 digits as 1:5 looks odd!) (fill to 2 digits as 1:5 looks odd!)
+    l = str(x & 0xff).zfill(2) # Lower byte (fill to 2 digits as 1:5 looks odd!)
+    return u + ":" + l
+                
+#GAPS>>>
+
+
 class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     def __init__(self, send_queuereg, *args):
         self.send_queuereg = send_queuereg
@@ -153,7 +349,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     
     def do_GET(self):
         try: 
-            if verbose: print("\t - Grotthttpserver - Get received ")
+            if verbget: print("\t - Grotthttpserver - Get received ")
             #parse url
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
@@ -184,10 +380,42 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     responseheader = "text/html"
                     htmlsendresp(self,responserc,responseheader,responsetxt)
                     return
+                    
+#GAPS<<<
+            elif self.path.startswith ("registers"):
+                responsetxt = "<h2>List of register values:</h2>"
+                responserc = 200 
+                responseheader = "text/html"
+                
+                sendcommand = DataLoggerSendCommand
+                #Add table header row
+                responsetxt += "<h3>Data logger registers</h3><table border=\"1\"><tr><th>Reg</th><th>Reading</th><th>Name</th><th>Description</th></tr>"
+                # Check passed inverter serial number is one we have
+                # loggerreg typically contains: {'dataloggerSN': {'ip': '172.16.0.1', 'port': 49999, 'protocol': '06', 'inverterSN': {'inverterno': '01', 'power': 0}}}
+                for dataloggerSN in loggerreg.keys():
+                    for register in datalogger_registers_table:
+                        register_value = read_register (self, register["register"], dataloggerSN, sendcommand)
+                        responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td></tr>"
+                responsetxt += "</table>"
+
+                sendcommand = InverterSendCommand
+                #Add table header row
+                responsetxt += "<h3>Inverter registers</h3><table border=\"1\"><tr><th>Reg</th><th>Reading</th><th>Name</th><th>Description</th><th>Value</th><th>Unit</th><th>Initial</th></tr>"
+                # Check passed inverter serial number is one we have
+                for dataloggerSN in loggerreg.keys():
+                    list_of_keys = list(loggerreg[dataloggerSN].keys()) # Tortuous method of getting the inverter S/N as it's a key
+                    inverterSN = list_of_keys[3]
+                    for register in inverter_registers_table:
+                        register_value = read_register (self, register["register"], dataloggerSN, sendcommand, inverterSN)
+                        if register["unit"] == "hextime": register_value = hextime_to_string (register_value) # Convert two byte values to legible time
+                        responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td><td>" + register["value"] + "</td><td>" + register["unit"] + "</td><td>" + register["initial"] + "</td></tr>"
+                responsetxt += "</table><br>"
+                htmlsendresp(self,responserc,responseheader,responsetxt)
+#GAPS>>>
                 
             elif self.path.startswith("info"):
                     #retrieve grottserver status                 
-                    if verbose: print("\t - Grotthttpserver - Status requested")
+                    if verbget: print("\t - Grotthttpserver - Status requested")
                     
                     
                     print("\t - Grottserver #active threads count: ", threading.active_count())
@@ -215,11 +443,11 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif self.path.startswith("datalogger") or self.path.startswith("inverter") :
                 if self.path.startswith("datalogger"):
-                    if verbose: print("\t - " + "Grotthttpserver - datalogger get received : ", urlquery)     
-                    sendcommand = "19"
+                    if verbget: print("\t - " + "Grotthttpserver - datalogger get received : ", urlquery)     
+                    sendcommand = DataLoggerSendCommand
                 else:
-                    if verbose: print("\t - " + "Grotthttpserver - inverter get received : ", urlquery)     
-                    sendcommand = "05"        
+                    if verbget: print("\t - " + "Grotthttpserver - inverter get received : ", urlquery)     
+                    sendcommand = InverterSendCommand
                 
                 #validcommand = False
                 if urlquery == {} : 
@@ -237,7 +465,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         command = urlquery["command"][0] 
                         #print(command)
                         if command in ("register", "regall") :
-                            if verbose: print("\t - " + "Grotthttpserver: get command: ", command)     
+                            if verbget: print("\t - " + "Grotthttpserver: get command: ", command)     
                         else :
                             #no valid command entered
                             responsetxt = b'no valid command entered'
@@ -254,7 +482,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     # test if datalogger  and / or inverter id is specified.
                     try:     
-                        if sendcommand == "05" : 
+                        if sendcommand == InverterSendCommand : 
                             inverterid_found = False
                             try: 
                                 #test if inverter id is specified and get loggerid 
@@ -288,7 +516,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 # no set default format op dec. 
                                 formatval = "dec"
                             
-                        if sendcommand == "19" : 
+                        if sendcommand == DataLoggerSendCommand : 
                             # if read datalogger info. 
                             dataloggerid = urlquery["datalogger"][0] 
                             
@@ -359,18 +587,19 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 body = header + body 
                 body = bytes.fromhex(body)
 
-                if verbose:
+                if verbget:
                     print("\t - Grotthttpserver - unencrypted get command:")
                     print(format_multi_line("\t\t ",body))
 
                 if loggerreg[dataloggerid]["protocol"] != "02" :
                     #encrypt message 
                     body = decrypt(body) 
-                    crc16 = libscrc.modbus(bytes.fromhex(body))
+##GAPS-                    crc16 = libscrc.modbus(bytes.fromhex(body))
+                    crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
                     body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
                 # add header
-                if verbose:
+                if verbget:
                     print("\t - Grotthttpserver: Get command created :")
                     print(format_multi_line("\t\t ",body))
 
@@ -389,13 +618,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #Set #retry waiting loop for datalogger or inverter 
                 if sendcommand == "05" :
                    wait = round(MaxInverterResponseWait/ResponseWaitInterval)
-                   #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
+                   #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
                     wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
-                    #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
+                    #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
 
                 for x in range(wait):
-                    if verbose: print("\t - Grotthttpserver - wait for GET response")
+                    if verbget: print("\t - Grotthttpserver - wait for GET response")
                     try: 
                         comresp = commandresponse[sendcommand][regkey]
                         
@@ -435,7 +664,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 responsetxt = b'OK'
                 responserc = 200 
                 responseheader = "text/body"
-                if verbose: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
+                if verbget: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
                 htmlsendresp(self,responserc,responseheader,responsetxt)
                 return
 
@@ -449,11 +678,11 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(400, "Bad request")
         
         except Exception as e:
-            print("\t - Grottserver - exception in httpserver thread - get occured : ", e)    
+            print("\t - Grottserver - exception in httpserver thread - get occured at line: ", e.__traceback__.tb_lineno, e)    
 
     def do_PUT(self):
         try: 
-            #if verbose: print("\t - Grott: datalogger PUT received")     
+            if verbput: print("\t - Grott: datalogger PUT received")     
             
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
@@ -464,10 +693,10 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             
             if self.path.startswith("datalogger") or self.path.startswith("inverter") :
                 if self.path.startswith("datalogger"):
-                    if verbose: print("\t - Grotthttpserver - datalogger PUT received : ", urlquery)     
+                    if verbput: print("\t - Grotthttpserver - datalogger PUT received : ", urlquery)     
                     sendcommand = "18"
                 else:
-                    if verbose: print("\t - Grotthttpserver - inverter PUT received : ", urlquery)     
+                    if verbput: print("\t - Grotthttpserver - inverter PUT received : ", urlquery)     
                     # Must be an inverter. Use 06 for now. May change to 10 later.
                     sendcommand = "06"        
                 
@@ -485,7 +714,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         #is valid command specified? 
                         command = urlquery["command"][0] 
                         if command in ("register", "multiregister", "datetime") :
-                            if verbose: print("\t - Grotthttpserver - PUT command: ", command)     
+                            if verbput: print("\t - Grotthttpserver - PUT command: ", command)     
                         else :
                             responsetxt = b'no valid command entered'
                             responserc = 400 
@@ -713,14 +942,15 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 body = header + body 
                 body = bytes.fromhex(body)
 
-                if verbose:
+                if verbput:
                     print("\t - Grotthttpserver - unencrypted put command:")
                     print(format_multi_line("\t\t ",body))
                 
                 if loggerreg[dataloggerid]["protocol"] != "02" :
                     #encrypt message 
                     body = decrypt(body) 
-                    crc16 = libscrc.modbus(bytes.fromhex(body))
+##GAPS-                    crc16 = libscrc.modbus(bytes.fromhex(body))
+                    crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
                     body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
                 # queue command 
@@ -744,21 +974,21 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter 
                 if sendcommand == "06" :
-                   wait = round(MaxInverterResponseWait/ResponseWaitInterval)
-                   #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
+                    wait = round(MaxInverterResponseWait/ResponseWaitInterval)
+                    if verbput: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
-                   wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
-                   #if verbose: print("\t - Grotthttpserver - wait Cycles:", wait )
+                    wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
+                    if verbput: print("\t - Grotthttpserver - wait Cycles:", wait )
 
                 for x in range(wait):
-                    if verbose: print("\t - Grotthttpserver - wait for PUT response")
+                    if verbput: print("\t - Grotthttpserver - wait for PUT response")
                     try: 
                         #read response: be aware a 18 command give 19 response, 06 send command gives 06 response in differnt format! 
                         if sendcommand == "18" :
                             comresp = commandresponse["18"][regkey]
                         else: 
                             comresp = commandresponse[sendcommand][regkey]
-                        if verbose: print("\t - " + "Grotthttperver - Commandresponse ", responseno, register, commandresponse[sendcommand][regkey]) 
+                        if verbput: print("\t - " + "Grotthttperver - Commandresponse ", responseno, register, commandresponse[sendcommand][regkey]) 
                         break
                     except: 
                         #wait for second and try again
@@ -783,12 +1013,12 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 responsetxt = b'OK'
                 responserc = 200 
                 responseheader = "text/body"
-                if verbose: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
+                if verbput: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
                 htmlsendresp(self,responserc,responseheader,responsetxt)
                 return
 
         except Exception as e:
-            print("\t - Grottserver - exception in httpserver thread - put occured : ", e)    
+            print("\t - Grottserver - exception in httpserver thread - put occured at line: ", e.__traceback__.tb_lineno, e)    
         
 
 class GrottHttpServer:
@@ -943,7 +1173,7 @@ class sendrecvserver:
             s.close()
         
         except Exception as e:
-            print("\t - Grottserver - exception in server thread - close connection :", e)   
+            print("\t - Grottserver - exception in server thread - close connection in line: ", e.__traceback__.tb_lineno, e)   
             #print("\t\t ", s )  
 
             # try: 
@@ -1041,7 +1271,9 @@ class sendrecvserver:
                     # protocol 05/06, encrypted ack
                     headerackx = bytes.fromhex(header[0:8] + '0003' + header[12:16] + '47')
                     # Create CRC 16 Modbus
-                    crc16 = libscrc.modbus(headerackx)
+##GAPS-                    crc16 = libscrc.modbus(headerackx)
+                    crc16 = calculateCRC (headerackx)  ##GAPS+
+                    print("***GAPS CRC row 1054: ", crc16)
                     # create response
                     response = headerackx + crc16.to_bytes(2, "big")
                 if verbose:
@@ -1095,6 +1327,7 @@ class sendrecvserver:
                     #print("result starts on:", 48+offset) 
                     if len(result_string) == 48+offset :
                         if verbose: print("\t - Grottserver - empty register get response recieved, response ignored")  
+                        value = ""
                     else: 
                         value = result_string[44+offset:48+offset]
                 elif rectype == "06" : 
@@ -1158,8 +1391,14 @@ class sendrecvserver:
                     print(format_multi_line("\t\t ", response))
                 self.send_queuereg[qname].put(response) 
         except Exception as e:
-            print("\t - Grottserver - exception in main server thread occured : ", e)        
+            print("\t - Grottserver - exception in main server thread occured in line: ", e.__traceback__.tb_lineno, e)        
 
+def calculateCRC (data):
+    crc = 0xFFFF
+    for data_byte in data:
+        idx = crc_table[(crc ^ int(data_byte)) & 0xFF]
+        crc = ((crc >> 8) & 0xFF) ^ idx
+    return crc
 
 if __name__ == "__main__":
 
