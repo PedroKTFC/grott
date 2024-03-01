@@ -78,7 +78,7 @@ crc_table = (
 0x8201,0x42c0,0x4380,0x8341,0x4100,0x81c1,0x8081,0x4040,
 )
 
-# tables of registers to read (data logger and inverter registers need to be read slightly differently)
+# tables of registers to read (data logger and inverter registers need to be read slightly differently). See https://github.com/johanmeijer/grott/blob/Beta-(2.8.x)/documentatie/registers.md
 datalogger_registers_table = (
 {"register": 4, "name": "Interval", "description": "update interval, Ascii, e.g 5 or 1 or 0.5"},
 {"register": 17, "name": "growatt_ip", "description": "Growatt server ip addres, Ascii, set for redirection to Grott e.g. 192.168.0.206"},
