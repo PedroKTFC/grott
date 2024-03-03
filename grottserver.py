@@ -567,7 +567,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #device id for datalogger is by default "01" for inverter deviceid is inverterid!
                 deviceid = "01"
                 # test if it is inverter command and set 
-                if sendcommand == "05":
+                if sendcommand == InverterSendCommand:
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
                     print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
@@ -603,7 +603,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter 
-                if sendcommand == "05" :
+                if sendcommand == InverterSendCommand :
                    wait = round(MaxInverterResponseWait/ResponseWaitInterval)
                    #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
@@ -615,7 +615,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     try: 
                         comresp = commandresponse[sendcommand][regkey]
                         
-                        if sendcommand == "05" :
+                        if sendcommand == InverterSendCommand :
                             if formatval == "dec" : 
                                 comresp["value"] = int(comresp["value"],16)
                             elif formatval == "text" : 
