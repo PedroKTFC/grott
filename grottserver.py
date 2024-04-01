@@ -2,7 +2,7 @@ import select
 import socket
 import queue
 import textwrap
-##GAPS- import libscrc
+##- import libscrc # new approach to calculatinng crc locally should mean no longer needed
 import threading
 import time
 import http.server
@@ -22,7 +22,7 @@ verrel = "0.0.14e"
 serverhost = "0.0.0.0"
 serverport = 5781
 httphost = "0.0.0.0"
-httpport = 5784 # 5782 GAPS replace for testing
+httpport = 5782
 verbose = False #True
 verbput = False
 verbget = False
@@ -35,7 +35,7 @@ ResponseWaitInterval = 0.5
 MaxInverterResponseWait = 10 
 #Totaal time in seconds to wait on Datalogger Response 
 MaxDataloggerResponseWait = 5
-#GAPS<<<
+
 # Some constants to make code easier to read
 InverterSendCommand = "05"
 DataLoggerSendCommand = "19"
@@ -78,7 +78,7 @@ crc_table = (
 0x8201,0x42c0,0x4380,0x8341,0x4100,0x81c1,0x8081,0x4040,
 )
 
-##GAPS+ tables of registers to read (data logger and inverter registers need to be read slightly differently
+# tables of registers to read (data logger and inverter registers need to be read slightly differently). See https://github.com/johanmeijer/grott/blob/Beta-(2.8.x)/documentatie/registers.md
 datalogger_registers_table = (
 {"register": 4, "name": "Interval", "description": "update interval, Ascii, e.g 5 or 1 or 0.5"},
 {"register": 17, "name": "growatt_ip", "description": "Growatt server ip addres, Ascii, set for redirection to Grott e.g. 192.168.0.206"},
@@ -125,7 +125,7 @@ inverter_registers_table = (
 {"register": 1117, "name": "Load First Stop Time 3", "description": "High eight bit: hour Low eight bit: minute", "value": "0-23 0-59", "unit": "hextime", "initial": ""},
 {"register": 1118, "name": "Load First on/off Switch 3", "description": "Enable: 1 Disable: 0", "value": "0 or 1", "unit": "int", "initial": ""}
 )
-#GAPS>>>
+
 # Formats multi-line data
 def format_multi_line(prefix, string, size=80):
     size -= len(prefix)
@@ -161,15 +161,12 @@ def validate_record(xdata):
     # validata data record on length and CRC (for "05" and "06" records)
     
     data = bytes.fromhex(xdata)
-    crc = 0     ##GAPS+
+    crc = 0
     ldata = len(data)
     len_orgpayload = int.from_bytes(data[4:6],"big")
     header = "".join("{:02x}".format(n) for n in data[0:8])
     protocol = header[6:8]
 
-    print("***GAPS validating record with protocol: ", protocol)    ##GAPS+
-##    print("GAPS - Original Data:")      ##GAPS+
-##    print(format_multi_line("\t\t ", xdata))
     if protocol in ("05","06"):
         lcrc = 4
         crc = int.from_bytes(data[ldata-2:ldata],"big")
@@ -179,9 +176,7 @@ def validate_record(xdata):
     len_realpayload = (ldata*2 - 12 -lcrc) / 2
 
     if protocol != "02" :
-        crc_calc = calculateCRC (data[0:ldata-2])  ##GAPS+
-        print ("***GAPS calculated and received CRC: ", crc_calc, crc)   ##GAPS+
-##GAPS-                crc_calc = libscrc.modbus(data[0:ldata-2])
+        crc_calc = calculateCRC (data[0:ldata-2])
 
     if len_realpayload == len_orgpayload :
         returncc = 0
@@ -197,7 +192,7 @@ def htmlsendresp(self, responserc, responseheader,  responsetxt) :
         self.send_response(responserc)
         self.send_header('Content-type', responseheader)
         self.end_headers()
-        self.wfile.write(responsetxt.encode('UTF-8')) #GAPS encode so in main code only deal with strings
+        self.wfile.write(responsetxt.encode('UTF-8')) # encode so in main code only deal with strings
         if verbose: print("\t - Grotthttpserver - http response send: ", responserc, responseheader, responsetxt)
 
 def createtimecommand(protocol,loggerid,sequenceno) : 
@@ -229,8 +224,7 @@ def createtimecommand(protocol,loggerid,sequenceno) :
         if protocol != "02" :
             #encrypt message 
             body = decrypt(body) 
-##GAPS-            crc16 = libscrc.modbus(bytes.fromhex(body))
-            crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
+            crc16 = calculateCRC (bytes.fromhex(body))
             body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
         
         if verbose:
@@ -245,7 +239,6 @@ def createtimecommand(protocol,loggerid,sequenceno) :
 
         return(body)
 
-#GAPS<<<        
 def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
     bodybytes = dataloggerid.encode('utf-8')
     body = bodybytes.hex()
@@ -331,16 +324,100 @@ def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
         except : 
             continue
     return "-" # If no valid response is received return a -
+
+def read_all_registers (self, first_register, last_register, dataloggerid, sendcommand, inverterid=""):
+
+    ## Reads all data logger or inverter registers from the provided first_register to the last_register
     
+    bodybytes = dataloggerid.encode('utf-8')
+    body = bodybytes.hex()
+
+    if loggerreg[dataloggerid]["protocol"] == "06" :
+        body = body + "0000000000000000000000000000000000000000"
+    body = body + "{:04x}".format(int(first_register))
+    body = body + "{:04x}".format(int(last_register))
+    #calculate length of payload = body/2 (str => bytes) + 2 bytes invertid + command. 
+    bodylen = int(len(body)/2+2)
+    
+    #device id for datalogger is by default "01" for inverter deviceid is inverterid!
+    deviceid = "01"
+    # test if it is inverter command and set 
+    if sendcommand == InverterSendCommand:
+        deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
+
+    header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+    body = header + body 
+    body = bytes.fromhex(body)
+
+    if verbreadreg:
+        print("Read all registers - unencrypted get command:")
+        print(format_multi_line("\t ",body))
+
+    if loggerreg[dataloggerid]["protocol"] != "02" :
+        #encrypt message 
+        body = decrypt(body) 
+        crc16 = calculateCRC (bytes.fromhex(body))
+        body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
+
+    if verbreadreg:
+        print("Read all registers - Get command created :")
+        print(format_multi_line("\t ",body))
+
+    # queue command 
+    qname = loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
+
+    # Message may get "lost" and no reply received so retry a few times
+    i = 0
+    while i < NoRetryRegisterReads:
+        i += 1
+        self.send_queuereg[qname].put(body) # Add message to queue 
+        responseno = "{:04x}".format(sendseq)
+        regkey = "{:04x}".format(int(first_register))
+        try: 
+            del commandresponse[sendcommand][regkey] 
+        except: 
+            pass 
+
+        #wait for response
+        #Set #retry waiting loop for datalogger or inverter 
+        if sendcommand == InverterSendCommand :
+           wait = round(MaxInverterResponseWait/ResponseWaitInterval)
+        else :
+            wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
+
+        formatval = "dec"   # Default to dec. May need to provide a format for each register in register arrays?
+        for x in range(wait):
+            if verbreadreg: print("Read all registers - wait for GET response")
+            try: 
+                comresp = commandresponse[sendcommand][regkey]
+                
+                if sendcommand == InverterSendCommand :
+                    if formatval == "dec" : 
+                        comresp["value"] = str (int(comresp["value"],16))
+                    elif formatval == "text" : 
+                        comresp["value"] = codecs.decode(comresp["value"], "hex").decode('utf-8')
+                responsetxt = comresp["value"]
+                return responsetxt
+
+            except  : 
+                #wait and try again
+                time.sleep(ResponseWaitInterval)
+            
+        try: 
+            if comresp["value"] != "" : 
+                responsetxt = comresp["value"]
+                return responsetxt
+
+        except : 
+            continue
+    return "-" # If no valid response is received return a -
+   
 def hextime_to_string (s):
     # s is string representation of the 2 byte time value
     x = int(s)
     u = str((x >> 8) & 0xff).zfill(2) # Upper byte (fill to 2 digits as 1:5 looks odd!) (fill to 2 digits as 1:5 looks odd!)
     l = str(x & 0xff).zfill(2) # Lower byte (fill to 2 digits as 1:5 looks odd!)
     return u + ":" + l
-                
-#GAPS>>>
-
 
 class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
     def __init__(self, send_queuereg, *args):
@@ -353,6 +430,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             #parse url
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
+            print ("Url is: ", self.path)
             
             if self.path == '/':
                 self.path = "grott.html"
@@ -381,23 +459,25 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     htmlsendresp(self,responserc,responseheader,responsetxt)
                     return
                     
-#GAPS<<<
             elif self.path.startswith ("registers"):
                 responsetxt = "<h2>List of register values:</h2>"
                 responserc = 200 
                 responseheader = "text/html"
-                
+
+                # Can only read data logger registers one at a time
                 sendcommand = DataLoggerSendCommand
-                #Add table header row
+                # Add table header row
                 responsetxt += "<h3>Data logger registers</h3><table border=\"1\"><tr><th>Reg</th><th>Reading</th><th>Name</th><th>Description</th></tr>"
                 # Check passed inverter serial number is one we have
                 # loggerreg typically contains: {'dataloggerSN': {'ip': '172.16.0.1', 'port': 49999, 'protocol': '06', 'inverterSN': {'inverterno': '01', 'power': 0}}}
+                # There's only one data logger
                 for dataloggerSN in loggerreg.keys():
                     for register in datalogger_registers_table:
                         register_value = read_register (self, register["register"], dataloggerSN, sendcommand)
                         responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td></tr>"
                 responsetxt += "</table>"
 
+                # Can read all inverter registers in one go
                 sendcommand = InverterSendCommand
                 #Add table header row
                 responsetxt += "<h3>Inverter registers</h3><table border=\"1\"><tr><th>Reg</th><th>Reading</th><th>Name</th><th>Description</th><th>Value</th><th>Unit</th><th>Initial</th></tr>"
@@ -405,13 +485,16 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 for dataloggerSN in loggerreg.keys():
                     list_of_keys = list(loggerreg[dataloggerSN].keys()) # Tortuous method of getting the inverter S/N as it's a key
                     inverterSN = list_of_keys[3]
+                    result = read_all_registers (self, inverter_registers_table[0]['register'], inverter_registers_table[-1]['register'], dataloggerSN, InverterSendCommand, inverterSN)
+
                     for register in inverter_registers_table:
-                        register_value = read_register (self, register["register"], dataloggerSN, sendcommand, inverterSN)
+                        register_value = multi_regs_read[register["register"]]
+                        register_value = str (int(register_value,16))
+
                         if register["unit"] == "hextime": register_value = hextime_to_string (register_value) # Convert two byte values to legible time
                         responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td><td>" + register["value"] + "</td><td>" + register["unit"] + "</td><td>" + register["initial"] + "</td></tr>"
                 responsetxt += "</table><br>"
                 htmlsendresp(self,responserc,responseheader,responsetxt)
-#GAPS>>>
                 
             elif self.path.startswith("info"):
                     #retrieve grottserver status                 
@@ -442,7 +525,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     return
 
             elif self.path.startswith("datalogger") or self.path.startswith("inverter") :
-                return #GAPS+ temporary stop
                 if self.path.startswith("datalogger"):
                     if verbget: print("\t - " + "Grotthttpserver - datalogger get received : ", urlquery)     
                     sendcommand = DataLoggerSendCommand
@@ -469,13 +551,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             if verbget: print("\t - " + "Grotthttpserver: get command: ", command)     
                         else :
                             #no valid command entered
-                            responsetxt = b'no valid command entered'
+                            responsetxt = 'no valid command entered'
                             responserc = 400 
                             responseheader = "text/html"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
                     except: 
-                        responsetxt = b'no command entered'
+                        responsetxt = 'no command entered'
                         responserc = 400 
                         responseheader = "text/html"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -498,7 +580,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 inverterid_found = False
                         
                             if not inverterid_found : 
-                                responsetxt = b'no or no valid invertid specified'
+                                responsetxt = 'no or no valid invertid specified'
                                 responserc = 400 
                                 responseheader = "text/html"
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -508,7 +590,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 # is format keyword specified? (dec, text, hex)
                                 formatval = urlquery["format"][0] 
                                 if formatval not in ("dec", "hex","text") :
-                                    responsetxt = b'invalid format specified'
+                                    responsetxt = 'invalid format specified'
                                     responserc = 400 
                                     responseheader = "text/body"
                                     htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -526,14 +608,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 dataloggerid = urlquery["datalogger"][0] 
                                 test = loggerreg[dataloggerid]
                             except:     
-                                responsetxt = b'invalid datalogger id '
+                                responsetxt = 'invalid datalogger id '
                                 responserc = 400 
                                 responseheader = "text/body"
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
                                 return
                     except:     
                             # do not think we will come here 
-                            responsetxt = b'no datalogger or inverterid specified'
+                            responsetxt = 'no datalogger or inverterid specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -545,7 +627,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         if int(urlquery["register"][0]) >= 0 and int(urlquery["register"][0]) < 4096 : 
                             register = urlquery["register"][0]
                         else: 
-                            responsetxt = b'invalid reg value specified'
+                            responsetxt = 'invalid reg value specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -560,7 +642,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         
 
                     else: 
-                        responsetxt = b'command not defined or not available yet'
+                        responsetxt = 'command not defined or not available yet'
                         responserc = 400 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -576,11 +658,11 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 body = body + "{:04x}".format(int(register))
                 #calculate length of payload = body/2 (str => bytes) + 2 bytes invertid + command. 
                 bodylen = int(len(body)/2+2)
-                
+
                 #device id for datalogger is by default "01" for inverter deviceid is inverterid!
                 deviceid = "01"
                 # test if it is inverter command and set 
-                if sendcommand == "05":
+                if sendcommand == InverterSendCommand:
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
                     print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
@@ -595,8 +677,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if loggerreg[dataloggerid]["protocol"] != "02" :
                     #encrypt message 
                     body = decrypt(body) 
-##GAPS-                    crc16 = libscrc.modbus(bytes.fromhex(body))
-                    crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
+                    crc16 = calculateCRC (bytes.fromhex(body))
                     body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
                 # add header
@@ -617,9 +698,9 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter 
-                if sendcommand == "05" :
-                   wait = round(MaxInverterResponseWait/ResponseWaitInterval)
-                   #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
+                if sendcommand == InverterSendCommand :
+                    wait = round(MaxInverterResponseWait/ResponseWaitInterval)
+                    #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
                     wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
                     #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
@@ -629,15 +710,16 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     try: 
                         comresp = commandresponse[sendcommand][regkey]
                         
-                        if sendcommand == "05" :
+                        if sendcommand == InverterSendCommand :
                             if formatval == "dec" : 
                                 comresp["value"] = int(comresp["value"],16)
                             elif formatval == "text" : 
                                 comresp["value"] = codecs.decode(comresp["value"], "hex").decode('utf-8')
-                        responsetxt = json.dumps(comresp).encode('utf-8')
+                        responsetxt = json.dumps(comresp)
                         responserc = 200 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
+                        if verbget: print("\t - Grotthttpserver: response success in wait loop:", responsetxt)
                         return
 
                     except  : 
@@ -648,21 +730,22 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         
                 try: 
                     if comresp != "" : 
-                        responsetxt = json.dumps(comresp).encode('utf-8')
-
+                        responsetxt = json.dumps(comresp)
                         responserc = 200 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
+                        if verbget: print("\t - Grotthttpserver: response success outside wait loop:", responsetxt)
                         return
 
                 except : 
-                    responsetxt = b'no or invalid response received'
+                    responsetxt = 'no or invalid response received'
                     responserc = 400 
                     responseheader = "text/body"
                     htmlsendresp(self,responserc,responseheader,responsetxt)
+                    if verbget: print("\t - Grotthttpserver: response failed :", responsetxt)
                     return
                 
-                responsetxt = b'OK'
+                responsetxt = 'OK'
                 responserc = 200 
                 responseheader = "text/body"
                 if verbget: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
@@ -672,18 +755,20 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             elif self.path == 'help':
                 responserc = 200 
                 responseheader = "text/body"
-                responsetxt = b'No help available yet'
+                responsetxt = 'No help available yet'
                 htmlsendresp(self,responserc,responseheader,responsetxt)
                 return
             else:
                 self.send_error(400, "Bad request")
+                if verbget: print("\t - Grotthttpserver: Bad request: ", self.path)
         
         except Exception as e:
             print("\t - Grottserver - exception in httpserver thread - get occured at line: ", e.__traceback__.tb_lineno, e)    
 
     def do_PUT(self):
         try: 
-            if verbput: print("\t - Grott: datalogger PUT received")     
+            if verbput: print("\t - Grott: datalogger PUT received")
+            print ("Url is: ", self.path)
             
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
@@ -703,7 +788,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 if urlquery == "" : 
                     #no command entered return loggerreg info:
-                    responsetxt = b'empty put received'
+                    responsetxt = 'empty put received'
                     responserc = 400 
                     responseheader = "text/html"
                     htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -717,13 +802,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         if command in ("register", "multiregister", "datetime") :
                             if verbput: print("\t - Grotthttpserver - PUT command: ", command)     
                         else :
-                            responsetxt = b'no valid command entered'
+                            responsetxt = 'no valid command entered'
                             responserc = 400 
                             responseheader = "text/html"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
                     except: 
-                        responsetxt = b'no command entered'
+                        responsetxt = 'no command entered'
                         responserc = 400 
                         responseheader = "text/html"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -746,7 +831,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 inverterid_found = False
                         
                             if not inverterid_found : 
-                                responsetxt = b'no or invalid invertid specified'
+                                responsetxt = 'no or invalid invertid specified'
                                 responserc = 400 
                                 responseheader = "text/html"
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -762,14 +847,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 test = loggerreg[dataloggerid]
 
                             except:     
-                                responsetxt = b'invalid datalogger id '
+                                responsetxt = 'invalid datalogger id '
                                 responserc = 400 
                                 responseheader = "text/body"
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
                                 return
                     except:     
                             # do not think we will come here 
-                            responsetxt = b'no datalogger or inverterid specified'
+                            responsetxt = 'no datalogger or inverterid specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -782,7 +867,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         if int(urlquery["register"][0]) >= 0 and int(urlquery["register"][0]) < 4096 : 
                             register = urlquery["register"][0]
                         else: 
-                            responsetxt = b'invalid reg value specified'
+                            responsetxt = 'invalid reg value specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -791,14 +876,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         try: 
                             value = urlquery["value"][0]
                         except: 
-                            responsetxt = b'no value specified'
+                            responsetxt = 'no value specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
                     
                         if value == "" : 
-                            responsetxt = b'no value specified'
+                            responsetxt = 'no value specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -814,7 +899,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         if int(urlquery["startregister"][0]) >= 0 and int(urlquery["startregister"][0]) < 4096 :
                             startregister = urlquery["startregister"][0]
                         else:
-                            responsetxt = b'invalid start register value specified'
+                            responsetxt = 'invalid start register value specified'
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -824,7 +909,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         if int(urlquery["endregister"][0]) >= 0 and int(urlquery["endregister"][0]) < 4096 :
                             endregister = urlquery["endregister"][0]
                         else:
-                            responsetxt = b'invalid end register value specified'
+                            responsetxt = 'invalid end register value specified'
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -833,14 +918,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         try:
                             value = urlquery["value"][0]
                         except:
-                            responsetxt = b'no value specified'
+                            responsetxt = 'no value specified'
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
 
                         if value == "" :
-                            responsetxt = b'no value specified'
+                            responsetxt = 'no value specified'
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -851,7 +936,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     elif command == "datetime" :
                         #process set datetime, only allowed for datalogger!!! 
                         if sendcommand == "06" :
-                            responsetxt = b'datetime command not allowed for inverter'
+                            responsetxt = 'datetime command not allowed for inverter'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -862,7 +947,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     else: 
                         # Start additional command processing here,  to be created: translate command to register (from list>)
-                        responsetxt = b'command not defined or not available yet'
+                        responsetxt = 'command not defined or not available yet'
                         responserc = 400 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -874,7 +959,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             # is format keyword specified? (dec, text, hex)
                             formatval = urlquery["format"][0] 
                             if formatval not in ("dec", "hex","text") : 
-                                responsetxt = b'invalid format specified'
+                                responsetxt = 'invalid format specified'
                                 responserc = 400 
                                 responseheader = "text/body"
                                 htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -895,7 +980,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             value = int(value,16)
 
                         if value < 0 and value > 65535 : 
-                            responsetxt = b'invalid value specified'
+                            responsetxt = 'invalid value specified'
                             responserc = 400 
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
@@ -950,8 +1035,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if loggerreg[dataloggerid]["protocol"] != "02" :
                     #encrypt message 
                     body = decrypt(body) 
-##GAPS-                    crc16 = libscrc.modbus(bytes.fromhex(body))
-                    crc16 = calculateCRC (bytes.fromhex(body))  ##GAPS+
+                    crc16 = calculateCRC (bytes.fromhex(body))
                     body = bytes.fromhex(body) + crc16.to_bytes(2, "big")
 
                 # queue command 
@@ -997,21 +1081,21 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         time.sleep(ResponseWaitInterval)
                 try: 
                     if comresp != "" : 
-                        responsetxt = b'OK'
+                        responsetxt = 'OK'
                         responserc = 200 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
                         return
 
                 except : 
-                    responsetxt = b'no or invalid response received'
+                    responsetxt = 'no or invalid response received'
                     responserc = 400 
                     responseheader = "text/body"
                     htmlsendresp(self,responserc,responseheader,responsetxt)
                     return
 
                 
-                responsetxt = b'OK'
+                responsetxt = 'OK'
                 responserc = 200 
                 responseheader = "text/body"
                 if verbput: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
@@ -1227,7 +1311,6 @@ class sendrecvserver:
 
             # Create header
             header = "".join("{:02x}".format(n) for n in data[0:8])
-            protocol = header[6:8]
             sequencenumber = header[0:4]
             protocol = header[6:8]
             #command = header[14:16]
@@ -1265,15 +1348,14 @@ class sendrecvserver:
                 print("\t - Grottserver - " + header[12:16] + " data record received")
                 
                 # create ack response
-                if header[6:8] == '02': 
+                if protocol == '02': ## Changed to use protocol, clearer!
                     #protocol 02, unencrypted ack
                     response = bytes.fromhex(header[0:8] + '0003' + header[12:16] + '00')
                 else: 
                     # protocol 05/06, encrypted ack
                     headerackx = bytes.fromhex(header[0:8] + '0003' + header[12:16] + '47')
                     # Create CRC 16 Modbus
-##GAPS-                    crc16 = libscrc.modbus(headerackx)
-                    crc16 = calculateCRC (headerackx)  ##GAPS+
+                    crc16 = calculateCRC (headerackx)
                     # create response
                     response = headerackx + crc16.to_bytes(2, "big")
                 if verbose:
@@ -1283,7 +1365,7 @@ class sendrecvserver:
                 if rectype in ("03") : 
                 # init record register logger/inverter id (including sessionid?)
                 # decrypt body. 
-                    if header[6:8] in ("05","06") :
+                    if protocol in ("05","06") : ## Changed to use protocol, clearer!
                         #print("header1 : ", header[6:8])
                         result_string = decrypt(data) 
                     else :         
@@ -1291,7 +1373,7 @@ class sendrecvserver:
             
                     loggerid = result_string[16:36]
                     loggerid = codecs.decode(loggerid, "hex").decode('utf-8')
-                    if header[6:8] in ("02","05") :                    
+                    if protocol in ("02","05") : ## Changed to use protocol, clearer!
                         inverterid = result_string[36:56]
                     else : 
                         inverterid = result_string[76:96]
@@ -1319,7 +1401,7 @@ class sendrecvserver:
                 if protocol in ("06") : 
                     offset = 40
 
-                register = int(result_string[36+offset:40+offset],16) 
+                register = int(result_string[36+offset:40+offset],16)
                 if rectype == "05" : 
                     #value = result_string[40+offset:44+offset]
                     #v0.0.14: test if empty response is sent (this will give CRC code as values)
@@ -1353,6 +1435,21 @@ class sendrecvserver:
                 else : 
                     #rectype 05 or 19 
                     commandresponse[rectype][regkey] = {"value" : value} 
+                    print ("Response is: ", commandresponse[rectype][regkey])
+                    
+                    ## If there are multiple register values, build array
+                    first_register = int(result_string[36+offset:40+offset],16)
+                    last_register = int(result_string[40+offset:44+offset],16)
+                    if rectype == "05" and first_register != last_register:
+                        ## Build array
+                        nr_values = last_register - first_register
+                        i = 0
+                        while i <= nr_values:
+                            multi_regs_read[first_register + i] = result_string[44+offset+(i*4):48+offset+(i*4)]
+                            i += 1
+                        print ("All registers: ", multi_regs_read)
+                            
+
 
                 response = None
 
@@ -1406,6 +1503,8 @@ if __name__ == "__main__":
 
     send_queuereg = {} 
     loggerreg = {}
+    
+    multi_regs_read = {}
     # response from command is written is this variable (for now flat, maybe dict later)
     commandresponse =  defaultdict(dict)
 
