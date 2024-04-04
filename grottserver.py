@@ -939,7 +939,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         try: 
                             start_register = urlquery["startregister"][0] 
                             responsetxt = 'Invalid start register specified (not hextime) ' + start_register
-                            register_found = validate_inverter_time_register_value (int(start_register), True)
+                            register_found = validate_inverter_time_register_value (int(start_register))
                         except : 
                             register_found = False
                         if not register_found : 
