@@ -834,7 +834,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     try: 
                         #is valid command specified? 
                         command = urlquery["command"][0] 
-                        if command in ("register", "multiregister", "datetime") :
+                        if command in ("register", "timeslot", "datetime") :
                             if verbput: print("\t - Grotthttpserver - PUT command: ", command)     
                         else :
                             responsetxt = 'no valid command entered'
