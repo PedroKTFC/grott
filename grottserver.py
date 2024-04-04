@@ -31,14 +31,16 @@ verbreadreg = False
 sendseq = 1
 #Time to sleep waiting on API response 
 ResponseWaitInterval = 0.5
-#Totaal time in seconds to wait on Iverter Response 
+#Total time in seconds to wait on Iverter Response 
 MaxInverterResponseWait = 10 
-#Totaal time in seconds to wait on Datalogger Response 
+#Total time in seconds to wait on Datalogger Response 
 MaxDataloggerResponseWait = 5
 
 # Some constants to make code easier to read
-InverterSendCommand = "05"
+InverterReadRegistersCommand = "05"
 DataLoggerSendCommand = "19"
+InverterWriteSingleRegisterCommand = "06"
+InverterWriteMultiRegistersCommand = "10"
 
 NoRetryRegisterReads = 5
 
@@ -154,7 +156,7 @@ def decrypt(decdata):
 
     result_string = "".join("{:02x}".format(n) for n in unscrambled)
 
-    print("\t - " + "Grott - data decrypted V2")
+    ##print("\t - " + "Grott - data decrypted V2")
     return result_string
 
 def validate_record(xdata): 
@@ -186,6 +188,29 @@ def validate_record(xdata):
         returncc = 8
 
     return(returncc)
+    
+def validate_inverter_time_register_value (check_register):
+    for row in inverter_registers_table:
+        if check_register == row["register"]:
+            ## The register is valid but is it a time register?
+            if row["unit"] == "hextime":
+                found = True
+            else:
+                found = False
+            break
+    else: found = False
+    return found
+    
+def validate_is_hex_time (check_value):
+    ## Does the value integer convert to a two byte hex value where the high byte
+    ## is in the range 0-23 and the low byte in the range 0-59
+    high = (check_value >> 8) & 0xff
+    low = check_value & 0xff
+    if high in range (0,24) and low in range (0,60):
+        passes = True
+    else:
+        passes = False
+    return passes
 
 def htmlsendresp(self, responserc, responseheader,  responsetxt) : 
         #send response
@@ -240,6 +265,8 @@ def createtimecommand(protocol,loggerid,sequenceno) :
         return(body)
 
 def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
+    global sendseq
+    
     bodybytes = dataloggerid.encode('utf-8')
     body = bodybytes.hex()
 
@@ -254,10 +281,11 @@ def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
     #device id for datalogger is by default "01" for inverter deviceid is inverterid!
     deviceid = "01"
     # test if it is inverter command and set 
-    if sendcommand == InverterSendCommand:
+    if sendcommand == InverterReadRegistersCommand:
         deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
 
     header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+    sendseq += 1
     body = header + body 
     body = bytes.fromhex(body)
 
@@ -293,7 +321,7 @@ def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
 
         #wait for response
         #Set #retry waiting loop for datalogger or inverter 
-        if sendcommand == InverterSendCommand :
+        if sendcommand == InverterReadRegistersCommand :
            wait = round(MaxInverterResponseWait/ResponseWaitInterval)
         else :
             wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
@@ -304,7 +332,7 @@ def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
             try: 
                 comresp = commandresponse[sendcommand][regkey]
                 
-                if sendcommand == InverterSendCommand :
+                if sendcommand == InverterReadRegistersCommand :
                     if formatval == "dec" : 
                         comresp["value"] = str (int(comresp["value"],16))
                     elif formatval == "text" : 
@@ -326,8 +354,9 @@ def read_register (self, register, dataloggerid, sendcommand, inverterid=""):
     return "-" # If no valid response is received return a -
 
 def read_all_registers (self, first_register, last_register, dataloggerid, sendcommand, inverterid=""):
+    global sendseq
 
-    ## Reads all data logger or inverter registers from the provided first_register to the last_register
+    ## Reads all inverter registers from the provided first_register to the last_register
     
     bodybytes = dataloggerid.encode('utf-8')
     body = bodybytes.hex()
@@ -342,10 +371,11 @@ def read_all_registers (self, first_register, last_register, dataloggerid, sendc
     #device id for datalogger is by default "01" for inverter deviceid is inverterid!
     deviceid = "01"
     # test if it is inverter command and set 
-    if sendcommand == InverterSendCommand:
+    if sendcommand == InverterReadRegistersCommand:
         deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
 
     header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
+    sendseq += 1
     body = header + body 
     body = bytes.fromhex(body)
 
@@ -380,7 +410,7 @@ def read_all_registers (self, first_register, last_register, dataloggerid, sendc
 
         #wait for response
         #Set #retry waiting loop for datalogger or inverter 
-        if sendcommand == InverterSendCommand :
+        if sendcommand == InverterReadRegistersCommand :
            wait = round(MaxInverterResponseWait/ResponseWaitInterval)
         else :
             wait = round(MaxDataloggerResponseWait/ResponseWaitInterval)
@@ -391,7 +421,7 @@ def read_all_registers (self, first_register, last_register, dataloggerid, sendc
             try: 
                 comresp = commandresponse[sendcommand][regkey]
                 
-                if sendcommand == InverterSendCommand :
+                if sendcommand == InverterReadRegistersCommand :
                     if formatval == "dec" : 
                         comresp["value"] = str (int(comresp["value"],16))
                     elif formatval == "text" : 
@@ -425,6 +455,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
         super().__init__(*args)
     
     def do_GET(self):
+        global sendseq
+
         try: 
             if verbget: print("\t - Grotthttpserver - Get received ")
             #parse url
@@ -478,14 +510,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 responsetxt += "</table>"
 
                 # Can read all inverter registers in one go
-                sendcommand = InverterSendCommand
+                sendcommand = InverterReadRegistersCommand
                 #Add table header row
                 responsetxt += "<h3>Inverter registers</h3><table border=\"1\"><tr><th>Reg</th><th>Reading</th><th>Name</th><th>Description</th><th>Value</th><th>Unit</th><th>Initial</th></tr>"
                 # Check passed inverter serial number is one we have
                 for dataloggerSN in loggerreg.keys():
                     list_of_keys = list(loggerreg[dataloggerSN].keys()) # Tortuous method of getting the inverter S/N as it's a key
                     inverterSN = list_of_keys[3]
-                    result = read_all_registers (self, inverter_registers_table[0]['register'], inverter_registers_table[-1]['register'], dataloggerSN, InverterSendCommand, inverterSN)
+                    result = read_all_registers (self, inverter_registers_table[0]['register'], inverter_registers_table[-1]['register'], dataloggerSN, InverterReadRegistersCommand, inverterSN)
 
                     for register in inverter_registers_table:
                         register_value = multi_regs_read[register["register"]]
@@ -530,7 +562,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     sendcommand = DataLoggerSendCommand
                 else:
                     if verbget: print("\t - " + "Grotthttpserver - inverter get received : ", urlquery)     
-                    sendcommand = InverterSendCommand
+                    sendcommand = InverterReadRegistersCommand
                 
                 #validcommand = False
                 if urlquery == {} : 
@@ -565,7 +597,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     # test if datalogger  and / or inverter id is specified.
                     try:     
-                        if sendcommand == InverterSendCommand : 
+                        if sendcommand == InverterReadRegistersCommand : 
                             inverterid_found = False
                             try: 
                                 #test if inverter id is specified and get loggerid 
@@ -662,12 +694,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #device id for datalogger is by default "01" for inverter deviceid is inverterid!
                 deviceid = "01"
                 # test if it is inverter command and set 
-                if sendcommand == InverterSendCommand:
+                if sendcommand == InverterReadRegistersCommand:
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
                     print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
                 header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
-                body = header + body 
+                sendseq += 1
+                body = header + body
                 body = bytes.fromhex(body)
 
                 if verbget:
@@ -698,7 +731,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter 
-                if sendcommand == InverterSendCommand :
+                if sendcommand == InverterReadRegistersCommand :
                     wait = round(MaxInverterResponseWait/ResponseWaitInterval)
                     #if verbget: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
@@ -710,7 +743,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     try: 
                         comresp = commandresponse[sendcommand][regkey]
                         
-                        if sendcommand == InverterSendCommand :
+                        if sendcommand == InverterReadRegistersCommand :
                             if formatval == "dec" : 
                                 comresp["value"] = int(comresp["value"],16)
                             elif formatval == "text" : 
@@ -766,6 +799,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             print("\t - Grottserver - exception in httpserver thread - get occured at line: ", e.__traceback__.tb_lineno, e)    
 
     def do_PUT(self):
+        global sendseq
+
         try: 
             if verbput: print("\t - Grott: datalogger PUT received")
             print ("Url is: ", self.path)
@@ -784,7 +819,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     if verbput: print("\t - Grotthttpserver - inverter PUT received : ", urlquery)     
                     # Must be an inverter. Use 06 for now. May change to 10 later.
-                    sendcommand = "06"        
+                    sendcommand = InverterWriteSingleRegisterCommand        
                 
                 if urlquery == "" : 
                     #no command entered return loggerreg info:
@@ -816,7 +851,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     # test if datalogger  and / or inverter id is specified.
                     try:     
-                        if sendcommand == "06" : 
+                        if sendcommand == InverterWriteSingleRegisterCommand: 
                             inverterid_found = False
                             try: 
                                 #test if inverter id is specified and get loggerid 
@@ -889,53 +924,94 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
                     
-                    elif command == "multiregister" :
+                    elif command == "timeslot" :
                         # Switch to multiregister command
-                        sendcommand = "10"
+                        sendcommand = InverterWriteMultiRegistersCommand
 
                         # TODO: Too much copy/paste here. Refactor into methods.
 
-                        # Check for valid start register
-                        if int(urlquery["startregister"][0]) >= 0 and int(urlquery["startregister"][0]) < 4096 :
-                            startregister = urlquery["startregister"][0]
-                        else:
-                            responsetxt = 'invalid start register value specified'
-                            responserc = 400
-                            responseheader = "text/body"
+                        ## The format of the command is:
+                        ## //server:port/inverter?command=timeslot&startregister=STARTREG&inverter=INVERTER&starttime=STARTTIME&endtime=ENDTIME&enable=ENABLE
+                        
+                        ## Check for valid start register (next register must also be a time one). Pattern is [start, end, enable]
+                        register_found = False
+                        responsetxt = 'No start register specified'
+                        try: 
+                            start_register = urlquery["startregister"][0] 
+                            responsetxt = 'Invalid start register specified (not hextime) ' + start_register
+                            register_found = validate_inverter_time_register_value (int(start_register), True)
+                        except : 
+                            register_found = False
+                        if not register_found : 
+                            responserc = 400 
+                            responseheader = "text/html"
+                            htmlsendresp(self,responserc,responseheader,responsetxt)
+                            return
+                        if not validate_inverter_time_register_value (int(start_register)+1):
+                            responsetxt = 'Start register not followed by a time register'
+                            responserc = 400 
+                            responseheader = "text/html"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
 
-                        # Check for valid end register
-                        if int(urlquery["endregister"][0]) >= 0 and int(urlquery["endregister"][0]) < 4096 :
-                            endregister = urlquery["endregister"][0]
-                        else:
-                            responsetxt = 'invalid end register value specified'
-                            responserc = 400
-                            responseheader = "text/body"
-                            htmlsendresp(self,responserc,responseheader,responsetxt)
-                            return
-
-                        try:
-                            value = urlquery["value"][0]
+                        # Check for start time
+                        value_found = False
+                        responsetxt = 'No start time specified'
+                        try: 
+                            start_time = urlquery["starttime"][0]
+                            responsetxt = 'Start time not a valid time ' + start_time
+                            value_found = validate_is_hex_time (int(start_time))
                         except:
-                            responsetxt = 'no value specified'
+                            value_found = False
+                        if not value_found : 
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
-
-                        if value == "" :
-                            responsetxt = 'no value specified'
+                            
+                        # Check for end time
+                        value_found = False
+                        responsetxt = 'No end time specified'
+                        try: 
+                            end_time = urlquery["endtime"][0]
+                            responsetxt = 'End time not a valid time ' + end_time
+                            value_found = validate_is_hex_time (int(end_time))
+                        except:
+                            value_found = False
+                        if not value_found : 
                             responserc = 400
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
-
+                            
+                        ## Times are valid but is end time later than start?
+                        if int(end_time) < int(start_time):
+                            responsetxt = 'Start time after end time'
+                            responserc = 400 
+                            responseheader = "text/html"
+                            htmlsendresp(self,responserc,responseheader,responsetxt)
+                            return
+                            
+                        ## Finally check enable/disable flag specified and is 0 or 1
+                        value_found = False
+                        responsetxt = 'No enable flag specified'
+                        try: 
+                            en_dis_able_flag = urlquery["enable"][0]
+                            responsetxt = 'Enable flag not 0 or 1 ' + en_dis_able_flag
+                            value_found = int(en_dis_able_flag) in (0,1)
+                        except:
+                            value_found = False
+                        if not value_found : 
+                            responserc = 400
+                            responseheader = "text/body"
+                            htmlsendresp(self,responserc,responseheader,responsetxt)
+                            return
+                            
                         # TODO: Check the value is the right length for the given start/end registers
 
                     elif command == "datetime" :
                         #process set datetime, only allowed for datalogger!!! 
-                        if sendcommand == "06" :
+                        if sendcommand == InverterWriteSingleRegisterCommand:
                             responsetxt = 'datetime command not allowed for inverter'
                             responserc = 400 
                             responseheader = "text/body"
@@ -954,7 +1030,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         return
                     
                     #test value:                
-                    if sendcommand == "06" : 
+                    if sendcommand == InverterWriteSingleRegisterCommand : 
                         try: 
                             # is format keyword specified? (dec, text, hex)
                             formatval = urlquery["format"][0] 
@@ -985,7 +1061,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
-        
                         
                 # start creating command 
 
@@ -995,22 +1070,16 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if loggerreg[dataloggerid]["protocol"] == "06" :
                     body = body + "0000000000000000000000000000000000000000"
                 
-                if sendcommand == "06" : 
+                if sendcommand == InverterWriteSingleRegisterCommand: 
                     value = "{:04x}".format(value)
                     valuelen = ""
-
-                elif sendcommand == "10" :
-                    # Value is already in hex format
-                    pass
-
                 else:   
                     value = value.encode('utf-8').hex()
                     valuelen = int(len(value)/2)
                     valuelen = "{:04x}".format(valuelen) 
 
-                if sendcommand == "10" :
-                    body = body + "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister)) + value
-
+                if sendcommand == InverterWriteMultiRegistersCommand:
+                    body = body + "{:04x}".format(int(start_register)) + "{:04x}".format(int(start_register)+2) + "{:04x}".format(int(start_time)) + "{:04x}".format(int(end_time)) + "{:04x}".format(int(en_dis_able_flag))
                 else :
                     body = body + "{:04x}".format(int(register)) + valuelen + value
 
@@ -1019,13 +1088,14 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 #device id for datalogger is by default "01" for inverter deviceid is inverterid!
                 deviceid = "01"
                 # test if it is inverter command and set deviceid
-                if sendcommand in ("06","10") :
+                if sendcommand in (InverterWriteSingleRegisterCommand,InverterWriteMultiRegistersCommand):
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
                 print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
                 #create header
                 header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
-                body = header + body 
+                sendseq += 1
+                body = header + body
                 body = bytes.fromhex(body)
 
                 if verbput:
@@ -1042,8 +1112,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 qname = loggerreg[dataloggerid]["ip"] + "_" + str(loggerreg[dataloggerid]["port"])
                 self.send_queuereg[qname].put(body)
                 responseno = "{:04x}".format(sendseq)
-                if sendcommand == "10":
-                    regkey = "{:04x}".format(int(startregister)) + "{:04x}".format(int(endregister))
+                if sendcommand == InverterWriteMultiRegistersCommand:
+                    regkey = "{:04x}".format(int(start_register))# + "{:04x}".format(int(end_register))
                 else :
                     regkey = "{:04x}".format(int(register))
 
@@ -1058,7 +1128,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                 #wait for response
                 #Set #retry waiting loop for datalogger or inverter 
-                if sendcommand == "06" :
+                if sendcommand in (InverterWriteSingleRegisterCommand, InverterWriteMultiRegistersCommand):
                     wait = round(MaxInverterResponseWait/ResponseWaitInterval)
                     if verbput: print("\t - Grotthttpserver - wait Cycles:", wait )
                 else :
@@ -1081,21 +1151,21 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         time.sleep(ResponseWaitInterval)
                 try: 
                     if comresp != "" : 
-                        responsetxt = 'OK'
+                        responsetxt = json.dumps(comresp) ##'OK'
                         responserc = 200 
                         responseheader = "text/body"
                         htmlsendresp(self,responserc,responseheader,responsetxt)
                         return
 
                 except : 
-                    responsetxt = 'no or invalid response received'
+                    responsetxt = 'No or invalid response received'
                     responserc = 400 
                     responseheader = "text/body"
                     htmlsendresp(self,responserc,responseheader,responsetxt)
                     return
 
                 
-                responsetxt = 'OK'
+                responsetxt = json.dumps(comresp) ##'OK'
                 responserc = 200 
                 responseheader = "text/body"
                 if verbput: print("\t - " + "Grott: datalogger command response :", responserc, responsetxt, responseheader)     
@@ -1164,6 +1234,12 @@ class sendrecvserver:
                 # Existing connection
                 try:
                     data = s.recv(1024)
+                    
+                    
+                    test_data = decrypt(data)
+                    print("Next read message: ", test_data)
+
+
                     if data:
                         self.process_data(s, data)
                     else:
@@ -1198,6 +1274,12 @@ class sendrecvserver:
             try: 
                 qname = client_address + "_" + str(client_port)
                 next_msg = self.send_queuereg[qname].get_nowait()
+                
+                
+                test_data = decrypt(next_msg)
+                print("Next write message: ", test_data)
+
+
                 if verbose:
                     print("\t - " + "Grottserver - get response from queue: ", qname + " msg: ")
                     print(format_multi_line("\t\t ",next_msg))
@@ -1394,7 +1476,7 @@ class sendrecvserver:
                     response = createtimecommand(protocol,loggerid,"0001")
                     if verbose: print("\t - Grottserver 03 announce data record processed") 
 
-            elif rectype in ("19","05","06","18"):
+            elif rectype in (DataLoggerSendCommand, InverterReadRegistersCommand, InverterWriteSingleRegisterCommand, InverterWriteMultiRegistersCommand, "18"):
                 if verbose: print("\t - Grottserver - " + header[12:16] + " Command Response record received, no response needed")
                 
                 offset = 0
@@ -1402,7 +1484,7 @@ class sendrecvserver:
                     offset = 40
 
                 register = int(result_string[36+offset:40+offset],16)
-                if rectype == "05" : 
+                if rectype == InverterReadRegistersCommand: 
                     #value = result_string[40+offset:44+offset]
                     #v0.0.14: test if empty response is sent (this will give CRC code as values)
                     #print("length resultstring:", len(result_string))
@@ -1412,12 +1494,15 @@ class sendrecvserver:
                         value = ""
                     else: 
                         value = result_string[44+offset:48+offset]
-                elif rectype == "06" : 
+                elif rectype == InverterWriteSingleRegisterCommand: 
                     result = result_string[40+offset:42+offset] 
                     #print("06 response result :", result)
                     value = result_string[42+offset:46+offset]      
                 elif rectype == "18" : 
                     result = result_string[40+offset:42+offset] 
+                elif rectype == InverterWriteMultiRegistersCommand:
+                    ## For multi writes we only get a single byte status just before the crc (I think)
+                    result = result_string[44+offset:46+offset]
                 else : 
                     # "19" response take length into account    
                     valuelen = int(result_string[40+offset:44+offset],16)
@@ -1426,12 +1511,13 @@ class sendrecvserver:
                     value = codecs.decode(result_string[44+offset:44+offset+valuelen*2], "hex").decode('ISO-8859-1')
                 
                 regkey = "{:04x}".format(register)
-                if rectype == "06" : 
+                if rectype == InverterWriteSingleRegisterCommand: 
                     # command 06 response has ack (result) + value. We will create a 06 response and a 05 response (for reg administration)
-                    commandresponse["06"][regkey] = {"value" : value , "result" : result}                
-                    commandresponse["05"][regkey] = {"value" : value} 
-                if rectype == "18" :
-                    commandresponse["18"][regkey] = {"result" : result}                
+                    commandresponse[InverterWriteSingleRegisterCommand][regkey] = {"value" : value , "result" : result}                
+                    commandresponse[InverterReadRegistersCommand][regkey] = {"value" : value}
+                ## This was an if but I think it should be an elif as else below will overwrite line above
+                elif rectype in (InverterWriteMultiRegistersCommand, "18"): ## was == "18" :
+                    commandresponse[rectype][regkey] = {"result" : result}                
                 else : 
                     #rectype 05 or 19 
                     commandresponse[rectype][regkey] = {"value" : value} 
@@ -1449,21 +1535,19 @@ class sendrecvserver:
                             i += 1
                         print ("All registers: ", multi_regs_read)
                             
-
-
                 response = None
 
-            elif rectype in ("10") :
-                if verbose: print("\t - Grottserver - " + header[12:16] + " record received, no response needed")
-
-                startregister = int(result_string[76:80],16)
-                endregister = int(result_string[80:84],16)
-                value = result_string[84:86]
-                
-                regkey = "{:04x}".format(startregister) + "{:04x}".format(endregister)
-                commandresponse[rectype][regkey] = {"value" : value} 
-
-                response = None
+#            elif rectype in (InverterWriteMultiRegistersCommand):
+#                if verbose: print("\t - Grottserver - " + header[12:16] + " #record received, no response needed")
+#
+#                startregister = int(result_string[76:80],16)
+#                endregister = int(result_string[80:84],16)
+#                value = result_string[84:86]
+#                
+#                regkey = "{:04x}".format(startregister) + "{:04x}".format(endregister)
+#                commandresponse[rectype][regkey] = {"value" : value} 
+#
+#                response = None
             
             elif rectype in ("29") :
                 if verbose: print("\t - Grottserver - " + header[12:16] + " record received, no response needed")
