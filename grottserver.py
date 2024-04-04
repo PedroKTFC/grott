@@ -1073,7 +1073,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if sendcommand == InverterWriteSingleRegisterCommand: 
                     value = "{:04x}".format(value)
                     valuelen = ""
-                else:   
+                elif sendcommand != InverterWriteMultiRegistersCommand: ## Below only for single values
                     value = value.encode('utf-8').hex()
                     valuelen = int(len(value)/2)
                     valuelen = "{:04x}".format(valuelen) 
