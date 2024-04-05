@@ -212,6 +212,18 @@ def validate_is_hex_time (check_value):
         passes = False
     return passes
 
+def validate_is_time (check_value):
+    ## Does the represent a valid time
+    hrs = check_value[0:2]
+    mins= check_value[-2:]
+    if int(hrs) in range(0,24) and int(mins) in range(0,60) and len(check_value) == 5 and check_value[2] == ":":
+        ## Time is valid so convert to Growatt hex representation
+        response = "{:02x}".format(int(hrs)) + "{:02x}".format(int(mins))
+    else:
+        ## Invalid time so return a "code"
+        response = "-"
+    return response
+
 def htmlsendresp(self, responserc, responseheader,  responsetxt) : 
         #send response
         self.send_response(responserc)
@@ -931,13 +943,13 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         # TODO: Too much copy/paste here. Refactor into methods.
 
                         ## The format of the command is:
-                        ## //server:port/inverter?command=timeslot&startregister=STARTREG&inverter=INVERTER&starttime=STARTTIME&endtime=ENDTIME&enable=ENABLE
+                        ## //server:port/inverter?command=timeslot&startregister=STARTREG&inverter=INVERTER&starttime=HH:MM&endtime=HH:MM&enable=ENABLE
                         
                         ## Check for valid start register (next register must also be a time one). Pattern is [start, end, enable]
                         register_found = False
                         responsetxt = 'No start register specified'
                         try: 
-                            start_register = urlquery["startregister"][0] 
+                            start_register = urlquery["startregister"][0]
                             responsetxt = 'Invalid start register specified (not hextime) ' + start_register
                             register_found = validate_inverter_time_register_value (int(start_register))
                         except : 
@@ -960,7 +972,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         try: 
                             start_time = urlquery["starttime"][0]
                             responsetxt = 'Start time not a valid time ' + start_time
-                            value_found = validate_is_hex_time (int(start_time))
+                            start_time_hex = validate_is_time (start_time)
+                            value_found = (start_time_hex != "-")
                         except:
                             value_found = False
                         if not value_found : 
@@ -975,7 +988,8 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                         try: 
                             end_time = urlquery["endtime"][0]
                             responsetxt = 'End time not a valid time ' + end_time
-                            value_found = validate_is_hex_time (int(end_time))
+                            end_time_hex = validate_is_time (end_time)
+                            value_found = (end_time_hex != "-")
                         except:
                             value_found = False
                         if not value_found : 
@@ -985,7 +999,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             return
                             
                         ## Times are valid but is end time later than start?
-                        if int(end_time) < int(start_time):
+                        if int(end_time_hex, 16) < int(start_time_hex, 16):
                             responsetxt = 'Start time after end time'
                             responserc = 400 
                             responseheader = "text/html"
@@ -1079,7 +1093,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     valuelen = "{:04x}".format(valuelen) 
 
                 if sendcommand == InverterWriteMultiRegistersCommand:
-                    body = body + "{:04x}".format(int(start_register)) + "{:04x}".format(int(start_register)+2) + "{:04x}".format(int(start_time)) + "{:04x}".format(int(end_time)) + "{:04x}".format(int(en_dis_able_flag))
+                    body = body + "{:04x}".format(int(start_register)) + "{:04x}".format(int(start_register)+2) + start_time_hex + end_time_hex + "{:04x}".format(int(en_dis_able_flag))
                 else :
                     body = body + "{:04x}".format(int(register)) + valuelen + value
 
