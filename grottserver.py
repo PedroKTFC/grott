@@ -1385,7 +1385,6 @@ class sendrecvserver:
             response = None
 
             # Display data
-            print(f"\t - Grottserver - Data received from : {client_address}:{client_port}")
             if verbose:
                 print("\t - " + "Grottserver - Original Data:")
                 print(format_multi_line("\t\t ", data))
@@ -1437,7 +1436,7 @@ class sendrecvserver:
             #v0.0.14: remove "29" (no response will be sent for this record!)          
             elif rectype in ("03", "04", "50", "1b", "20"):
                 # if datarecord send ack.
-                print("\t - Grottserver - " + header[12:16] + " data record received")
+#                print("\t - Grottserver - " + header[12:16] + " data record received")
                 
                 # create ack response
                 if protocol == '02': ## Changed to use protocol, clearer!
