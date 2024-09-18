@@ -1249,10 +1249,8 @@ class sendrecvserver:
                 try:
                     data = s.recv(1024)
                     
-                    
-                    test_data = decrypt(data)
-                    print("Next read message: ", test_data)
-
+#                    test_data = decrypt(data)
+#                    print("Next read message: ", test_data)
 
                     if data:
                         self.process_data(s, data)
@@ -1289,10 +1287,8 @@ class sendrecvserver:
                 qname = client_address + "_" + str(client_port)
                 next_msg = self.send_queuereg[qname].get_nowait()
                 
-                
-                test_data = decrypt(next_msg)
-                print("Next write message: ", test_data)
-
+#                test_data = decrypt(next_msg)
+#                print("Next write message: ", test_data)
 
                 if verbose:
                     print("\t - " + "Grottserver - get response from queue: ", qname + " msg: ")
