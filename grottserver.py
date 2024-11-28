@@ -87,6 +87,14 @@ datalogger_registers_table = (
 {"register": 18, "name": "growatt_port", "description": "Growatt server Port, Num, set for redirection to Grott e.g. 5279"},
 {"register": 31, "name": "datetime", "description": "current date-time, Ascii, e.g 2022-05-17 21:01:50"}
 )
+inverter_timedate_registers_table = (
+{"register": 45, "name": "Year", "description": "Inverter time: 4 digit year when read, offset from 2000 when written", "value": "yyyy", "unit": "int", "initial": ""},
+{"register": 46, "name": "Month", "description": "Inverter time: month", "value": "1-12", "unit": "int", "initial": ""},
+{"register": 47, "name": "Day", "description": "Inverter time: day", "value": "1-31", "unit": "int", "initial": ""},
+{"register": 48, "name": "Hour", "description": "Inverter time: hour", "value": "0-23", "unit": "int", "initial": ""},
+{"register": 49, "name": "Minute", "description": "Inverter time: minute", "value": "0-59", "unit": "int", "initial": ""},
+{"register": 50, "name": "Second", "description": "Inverter time: second", "value": "0-59", "unit": "int", "initial": ""}
+)
 inverter_registers_table = (
 {"register": 1000, "name": "Float charge current limit", "description": "When charge current battery need is lower than this value, enter nto float charge", "value": "", "unit": "0.1", "initial": "600"},
 {"register": 1044, "name": "Priority", "description": "ForceChrEn / ForceDischrEn Load first / Bat first / Grid first", "value": "0:Load (default) 1:Battery 2:Grid", "unit": "int", "initial": "0"},
@@ -474,7 +482,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
             #parse url
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
-            print ("Url is: ", self.path)
             
             if self.path == '/':
                 self.path = "grott.html"
@@ -529,12 +536,18 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 for dataloggerSN in loggerreg.keys():
                     list_of_keys = list(loggerreg[dataloggerSN].keys()) # Tortuous method of getting the inverter S/N as it's a key
                     inverterSN = list_of_keys[3]
+                    
+                    result = read_all_registers (self, inverter_timedate_registers_table[0]['register'], inverter_timedate_registers_table[-1]['register'], dataloggerSN, InverterReadRegistersCommand, inverterSN)
+                    for register in inverter_timedate_registers_table:
+                        register_value = multi_regs_read[register["register"]]
+                        register_value = str (int(register_value,16))
+                        #if register["unit"] == "hextime": register_value = hextime_to_string (register_value) # Convert two byte values to legible time
+                        responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td><td>" + register["value"] + "</td><td>" + register["unit"] + "</td><td>" + register["initial"] + "</td></tr>"
+                    
                     result = read_all_registers (self, inverter_registers_table[0]['register'], inverter_registers_table[-1]['register'], dataloggerSN, InverterReadRegistersCommand, inverterSN)
-
                     for register in inverter_registers_table:
                         register_value = multi_regs_read[register["register"]]
                         register_value = str (int(register_value,16))
-
                         if register["unit"] == "hextime": register_value = hextime_to_string (register_value) # Convert two byte values to legible time
                         responsetxt += "<tr><td>" + str(register["register"]) + "</td><td>" + register_value + "</td><td>" + register["name"] + "</td><td>" + register["description"] + "</td><td>" + register["value"] + "</td><td>" + register["unit"] + "</td><td>" + register["initial"] + "</td></tr>"
                 responsetxt += "</table><br>"
@@ -708,7 +721,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 # test if it is inverter command and set 
                 if sendcommand == InverterReadRegistersCommand:
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
-                    print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
                 header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
                 sendseq += 1
@@ -769,7 +781,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
                     except  : 
                         #wait for second and try again
-                         #Set retry waiting cycle time loop for datalogger or inverter 
+                        #Set retry waiting cycle time loop for datalogger or inverter 
                         
                         time.sleep(ResponseWaitInterval)
         
@@ -815,7 +827,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         try: 
             if verbput: print("\t - Grott: datalogger PUT received")
-            print ("Url is: ", self.path)
             
             url = urlparse(self.path)
             urlquery = parse_qs(url.query)
@@ -1020,20 +1031,30 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                             responseheader = "text/body"
                             htmlsendresp(self,responserc,responseheader,responsetxt)
                             return
-                            
+                        multi_regs_value = "{:04x}".format(int(start_register)) + "{:04x}".format(int(start_register)+2) + start_time_hex + end_time_hex + "{:04x}".format(int(en_dis_able_flag))
+              
                         # TODO: Check the value is the right length for the given start/end registers
 
                     elif command == "datetime" :
-                        #process set datetime, only allowed for datalogger!!! 
+                        #process set datetime, inverter and data logger versions are very different! 
                         if sendcommand == InverterWriteSingleRegisterCommand:
-                            responsetxt = 'datetime command not allowed for inverter'
-                            responserc = 400 
-                            responseheader = "text/body"
-                            htmlsendresp(self,responserc,responseheader,responsetxt)
-                            return
-                        #prepare datetime 
-                        register = 31
-                        value = str(datetime.now().replace(microsecond=0))   
+                            # Switch to multiregister command
+                            sendcommand = InverterWriteMultiRegistersCommand
+                            time_now = datetime.now()
+                            # year = time_now.strftime("%Y")
+                            year = time_now.year - 2000 # Time set uses number of years from 2000
+                            month = time_now.strftime("%m")
+                            day = time_now.strftime("%d")
+                            hour = time_now.strftime("%H")
+                            minute = time_now.strftime("%M")
+                            second = time_now.strftime("%S")
+                            start_register = "45"
+                            end_register = "50"
+                            multi_regs_value = "{:04x}".format(int(start_register)) + "{:04x}".format(int(end_register)) + "{:04x}".format(int(year)) + "{:04x}".format(int(month)) + "{:04x}".format(int(day)) + "{:04x}".format(int(hour)) + "{:04x}".format(int(minute)) + "{:04x}".format(int(second))
+                        else:
+							#prepare datetime for data logger
+                            register = 31
+                            value = str(datetime.now().replace(microsecond=0))
 
                     else: 
                         # Start additional command processing here,  to be created: translate command to register (from list>)
@@ -1093,7 +1114,7 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                     valuelen = "{:04x}".format(valuelen) 
 
                 if sendcommand == InverterWriteMultiRegistersCommand:
-                    body = body + "{:04x}".format(int(start_register)) + "{:04x}".format(int(start_register)+2) + start_time_hex + end_time_hex + "{:04x}".format(int(en_dis_able_flag))
+                    body = body + multi_regs_value
                 else :
                     body = body + "{:04x}".format(int(register)) + valuelen + value
 
@@ -1104,7 +1125,6 @@ class GrottHttpRequestHandler(http.server.BaseHTTPRequestHandler):
                 # test if it is inverter command and set deviceid
                 if sendcommand in (InverterWriteSingleRegisterCommand,InverterWriteMultiRegistersCommand):
                     deviceid = (loggerreg[dataloggerid][inverterid]["inverterno"])
-                print("\t - Grotthttpserver: selected deviceid :", deviceid)
 
                 #create header
                 header = "{:04x}".format(sendseq) + "00" + loggerreg[dataloggerid]["protocol"] + "{:04x}".format(bodylen) + deviceid + sendcommand
@@ -1249,8 +1269,8 @@ class sendrecvserver:
                 try:
                     data = s.recv(1024)
                     
-#                    test_data = decrypt(data)
-#                    print("Next read message: ", test_data)
+                    #test_data = decrypt(data)
+                    #print("Next read message: ", test_data)
 
                     if data:
                         self.process_data(s, data)
@@ -1288,7 +1308,20 @@ class sendrecvserver:
                 next_msg = self.send_queuereg[qname].get_nowait()
                 
 #                test_data = decrypt(next_msg)
-#                print("Next write message: ", test_data)
+#                print("Next write message: ", bytes.fromhex(test_data))
+#                test_protocol = test_data[6:8]
+#                test_register = test_data[78:80]
+#                print("Next write message. Protocol = ",test_protocol," , register = ", test_register)
+
+#                test_header = test_data[0:4]
+#                if test_register == '1f':
+#                    bytes_obj = bytes.fromhex(test_data)
+#                    now = datetime.now()
+#                    current_time = now.strftime("%H:%M:%S")
+#                    string = bytes_obj.decode('utf-16')
+#                    print(current_time,": Next write message. Protocol = ",test_protocol," , register = ", test_register)
+#                    print("\tNext write message: ", bytes.fromhex(test_data))
+#                    print ("\tTime set = ", bytes_obj[42:61])
 
                 if verbose:
                     print("\t - " + "Grottserver - get response from queue: ", qname + " msg: ")
@@ -1530,7 +1563,6 @@ class sendrecvserver:
                 else : 
                     #rectype 05 or 19 
                     commandresponse[rectype][regkey] = {"value" : value} 
-                    print ("Response is: ", commandresponse[rectype][regkey])
                     
                     ## If there are multiple register values, build array
                     first_register = int(result_string[36+offset:40+offset],16)
@@ -1542,7 +1574,6 @@ class sendrecvserver:
                         while i <= nr_values:
                             multi_regs_read[first_register + i] = result_string[44+offset+(i*4):48+offset+(i*4)]
                             i += 1
-                        print ("All registers: ", multi_regs_read)
                             
                 response = None
 
